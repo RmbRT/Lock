@@ -14,6 +14,7 @@ namespace Lock
 	struct bad_read { };
 	struct bad_move_write_lock { };
 	struct bad_thread_safe_move{ };
+	struct bad_thread_safe_destruct { };
 
 	typedef std::mutex default_mutex;
 
@@ -48,6 +49,12 @@ namespace Lock
 		{
 			if(_write_lock || _read_lock)
 				throw bad_thread_safe_move();
+		}
+
+		~ThreadSafe() throw (bad_thread_safe_destruct)
+		{
+			if(_write_lock || _read_lock)
+				throw bad_thread_safe_destruct();
 		}
 
 		template<class ...Args>
