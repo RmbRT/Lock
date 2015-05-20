@@ -1,7 +1,6 @@
-#ifndef __proxy_hpp_defined
-#define __proxy_hpp_defined
+#ifndef __lock_lock_hpp_defined
+#define __lock_lock_hpp_defined
 
-#include <stack>
 #include <mutex>
 #include <type_traits>
 
@@ -13,7 +12,7 @@ namespace Lock
 	struct bad_write { };
 	struct bad_read { };
 	struct bad_move_write_lock { };
-	struct bad_thread_safe_move{ };
+	struct bad_thread_safe_move { };
 	struct bad_thread_safe_destruct { };
 
 	typedef std::mutex default_mutex;
@@ -155,6 +154,96 @@ namespace Lock
 			if(!_write_lock)
 				return obj;
 		}
+	};
+
+	template<class T, class mutex_t = default_mutex>
+	class ReadLock
+	{
+		ThreadSafe<T, mutex_t> *proxy;
+		const T* object;
+		using _MyT = ReadLock<T, mutex_t>;
+	public:
+		ReadLock(ThreadSafe<T, mutex_t> &proxy) : proxy(&proxy), object(nullptr) { proxy.lock_read(); object = reinterpret_cast<const T*>(&reinterpret_cast<const char &>(proxy.read())); }
+		ReadLock(const _MyT &other) : proxy(other.proxy), object(other.object) { if(proxy) proxy->lock_read(); }
+		ReadLock(_MyT &&move) : proxy(move.proxy), object(move.object)
+		{
+			move.proxy = nullptr;
+			move.object = nullptr;
+		}
+		~ReadLock()
+		{
+			if(proxy)
+				proxy->unlock_read();
+			proxy = nullptr;
+			object = nullptr;
+		}
+		_MyT &operator=(const _MyT &other)
+		{
+			if(&other == this || proxy == other.proxy)
+				return *this;
+
+			if(proxy)
+				proxy->unlock_read();
+
+			proxy = other.proxy;
+
+			if(proxy)
+				proxy->lock_read();
+
+			return *this;
+		}
+
+		const T* operator->() const { return object; }
+		const T& operator*() const { return *object; }
+	};
+
+	template<class T, class mutex_t = default_mutex>
+	class WriteLock
+	{
+		ThreadSafe<T, mutex_t> *proxy;
+		T *object;
+		using _MyT = WriteLock<T, mutex_t>;
+	public:
+		WriteLock(ThreadSafe<T, mutex_t> &proxy) : proxy(&proxy), object(nullptr) { proxy.lock_write(this); object = reinterpret_cast<T*>(&reinterpret_cast<T&>(proxy.write(this))); }
+		WriteLock(const _MyT &) = delete;
+		WriteLock(_MyT && move) : proxy(move.proxy), object(move.object)
+		{
+			if(proxy)
+				proxy->move_write_lock(&move, this);
+			move.proxy = nullptr;
+			move.object = nullptr;
+		}
+		~WriteLock()
+		{
+			if(proxy)
+				proxy->unlock_write(this);
+			proxy = nullptr;
+			object = nullptr;
+		}
+
+		_MyT &operator=(const _MyT &) = delete;
+		_MyT &operator=(_MyT && move)
+		{
+			if(this == &move)
+				return *this;
+
+			if(proxy)
+				proxy->unlock_write(this);
+
+			proxy = move.proxy;
+			object = move.object;
+
+			if(proxy)
+				proxy->move_write_lock(&move, this);
+
+			move.proxy = nullptr;
+			move.object = nullptr;
+
+			return *this;
+		}
+
+		inline T* operator->() const { return object; }
+		inline T& operator*() const { return *object; }
 	};
 }
 
