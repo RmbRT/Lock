@@ -13,6 +13,7 @@ namespace Lock
 	struct bad_write { };
 	struct bad_read { };
 	struct bad_move_write_lock { };
+	struct bad_thread_safe_move{ };
 
 	typedef std::mutex default_mutex;
 
@@ -42,20 +43,26 @@ namespace Lock
 		template<class ...Args>
 		ThreadSafe(Args&&... args) : _mutex(), _write_lock(nullptr), _read_lock(0), obj(std::forward<Args>(args)...) { }
 
+		ThreadSafe(_MyT && move) throw (bad_thread_safe_move)
+			: _mutex(), _write_lock(move._write_lock), _read_lock(move._read_lock), obj(std::move(move.obj))
+		{
+			if(_write_lock || _read_lock)
+				throw bad_thread_safe_move();
+		}
 
 		template<class ...Args>
 		_MyT &operator=(Args... args) = delete;
 
 		ThreadSafe(const _MyT &) = delete;
 
-		_WriteLock writeLock() { return _WriteLock(*this); }
-		_ReadLock readLock() { return _ReadLock(*this); }
+		inline _WriteLock writeLock() { return _WriteLock(*this); }
+		inline _ReadLock readLock() { return _ReadLock(*this); }
 
-		const T &read_unsafe()
+		inline const T &read_unsafe()
 		{
 			return obj;
 		}
-		T &write_unsafe()
+		inline T &write_unsafe()
 		{
 			return obj;
 		}
