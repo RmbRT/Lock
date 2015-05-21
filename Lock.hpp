@@ -65,6 +65,7 @@ namespace Lock
 
 	template<class ...T>
 	/*Locks multiple thread safe objects for reading, and sets the passed read locks to their corresponding thread safe object.
+	This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks.*/
 	void multi_read_lock(helper::read_lock_pair<T>&... args)
 	{	using namespace helper;
 		// try to lock all thread safe objects.
@@ -82,6 +83,7 @@ namespace Lock
 
 	template<class ...T>
 	/*Locks multiple thread safe objects for writing, and sets the passed write locks to their corrseponding thread safe object.
+	This function releases all locks and tries to re-lock all locks in case one or more reosources could not be locked, to prevent dead locks.*/
 	void multi_write_lock(helper::write_lock_pair<T>&... args)
 	{	using namespace helper;
 		// try to lock all thread safe objects.
