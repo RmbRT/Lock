@@ -5,7 +5,7 @@
 #include <type_traits>
 #include <cassert>
 
-namespace Lock
+namespace lock
 {
 
 	struct bad_read_unlock { };
@@ -44,6 +44,7 @@ namespace Lock
 		inline void destructor(T &obj, Targs&... args) { obj.~T(); destructor(args...); }
 		inline bool try_read_lock(void) { return true; }
 		inline bool try_write_lock(void) { return true; }
+		inline bool try_any_lock(void) { return true; }
 	}
 
 	template<class T>
@@ -82,8 +83,8 @@ namespace Lock
 	}
 
 	template<class ...T>
-	/*Locks multiple thread safe objects for writing, and sets the passed write locks to their corrseponding thread safe object.
-	This function releases all locks and tries to re-lock all locks in case one or more reosources could not be locked, to prevent dead locks.*/
+	/*Locks multiple thread safe objects for writing, and sets the passed write locks to their corresponding thread safe object.
+	This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks.*/
 	void multi_write_lock(helper::write_lock_pair<T>&... args)
 	{	using namespace helper;
 		// try to lock all thread safe objects.
@@ -91,6 +92,40 @@ namespace Lock
 			// not all resources could be locked. Release all locks, try again.
 			destructor(args.lock...);
 	}
+
+	template<class T, class ...Targs>
+	bool try_any_lock(T &arg, Targs&... args);
+	template<class T, class ...Targs>
+	inline bool try_any_lock(helper::read_lock_pair<T>& arg, Targs&...args);
+	template<class T, class ...Targs>
+	inline bool try_any_lock(helper::write_lock_pair<T>& arg, Targs&...args);
+
+	template<class T, class ...Targs>
+	bool try_any_lock(T &arg, Targs&... args) { static_assert("please only pass values created with lock::pair()."); }
+
+	template<class T, class ...Targs>
+	inline bool try_any_lock(helper::write_lock_pair<T> &arg, Targs&... args)
+	{	using namespace helper;
+		return arg.thread_safe.try_lock_write(arg.lock) && try_any_lock(args...);
+	}
+
+	template<class T, class ...Targs>
+	inline bool try_any_lock(helper::read_lock_pair<T> &arg, Targs&... args)
+	{	using namespace helper;
+		return arg.thread_safe.try_lock_read(arg.lock) && try_any_lock(args...);
+	}
+
+	template<class ...T>
+	/*Locks multiple thread safe objects for writing or reading, and sets the passed locks to their corresponding thread safe object.
+	This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks.*/
+	inline void multi_lock(T&... args)
+	{	using namespace helper;
+		// try to lock all thread safe objects.
+		while(!try_any_lock(args...))
+			// not all resources could be locked. Release all locks, try again.
+			destructor(args.lock...);
+	}
+
 
 	template<class T>
 	/*Wrapper class for shared resources.
