@@ -1,5 +1,5 @@
 # Lock
-Lock is a Locking library for locking shared resources.
+Lock is a thread safety library supporting locking shared resources.
 ## Features
 * Scoped read / write locks
 * Ability to lock multiple resources in one call, preventing only partially locking the resources and dead locks.
