@@ -2,8 +2,11 @@
 Lock is a Locking library for locking shared resources.
 ## Features
 * Scoped read / write locks
-* Ability to lock multiple resources in one call, preventing only partially locking the resources and dead locks. If you have to lock multiple resources, lock them using only one call! For read locks only, use ```lock::multi_read_lock```. For write locks only, use ```lock::multi_write_lock```. For mixed type locks, use ```lock::multi_lock```.
+* Ability to lock multiple resources in one call, preventing only partially locking the resources and dead locks.
+* ```lock::ThreadSafe``` supports moving, but not copying.
 
+## Important
+If you have to lock more than one resource in a function, *always* do so in one call. For mixed type locks, use ```lock::multi_lock```. You may want to emphasize on the fact that you only want to acquire read locks / only write locks, and you can do so using ```lock::multi_read_lock``` / ```lock::multi_write_lock```. If you create multiple locks using the constructor of the lock classes, then you could cause a dead lock, as you only partially lock the resources at once.
 ## Rules
 * A shared resource may be locked for writing by only one WriteLock at a time.
 * A shared resource cannot be read locked and write locked at the same time.
@@ -13,82 +16,30 @@ Lock is a Locking library for locking shared resources.
 * A shared resource may not be moved, if there are locks remaining.
 
 ## Example #1: Single locks.
+This example demonstrates the use of ```lock::ThreadSafe``` objects, as well as ```lock::ReadLock``` and ```lock::WriteLock``` for direct single locks.
 ```c++
-#include "Lock/Lock.hpp"
+ThreadSafe<int> resource(42);
 
-
-#include <iostream>
-#include <string>
-#include <thread>
-
-
-std::string unsafe_a("A quick brown fox jumps over the lazy dog."), unsafe_b("Franz jagt in seinem komplett verwahrlosten Taxi quer durch Bayern.");
-lock::ThreadSafe<std::string> thread_safe("initial value");
-
-void writer_thread1()
+void my_thread()
 {
-	lock::WriteLock<std::string> lock(thread_safe);
-	for(unsigned i = 0; i<lock->size(); i++)
-		(*lock)[i]++;
-
-	std::cout << __FUNCTION__": " << *lock << "\n";
+	// acquire a read lock on resource.
+	lock::ReadLock<int> r_resource(resource);
+	// access the stored value via *
+	std::cout << *r_resource << std::endl;
 }
-void writer_thread2()
+void second_thread()
 {
-	lock::WriteLock<std::string> lock(thread_safe);
-	*lock = unsafe_a;
-	*lock += unsafe_b;
-	
-	std::cout << __FUNCTION__": " << *lock << "\n";
-}
-void writer_thread3()
-{
-	// different way of acquiring locks
-	lock::WriteLock<std::string> lock = thread_safe.writeLock();
-	*lock += unsafe_a;
-
-	std::cout << __FUNCTION__": " << *lock << "\n";
-}
-void reader_thread1()
-{
-	lock::ReadLock<std::string> lock(thread_safe);
-	std::cout << __FUNCTION__": thread_safe[4] == '" << (*lock)[4] << "'\n";
-}
-void reader_thread2()
-{
-	lock::ReadLock<std::string> lock(thread_safe);
-	std::cout << __FUNCTION__": thread_safe == '" << *lock << "'\n";
+	// acquire a write lock on resource.
+	lock::WriteLock<int> w_resource(resource);
+	// access the stored value via *
+	*w_resource = 1337;
 }
 
-int main()
-{
-	std::thread w1(writer_thread1), w2(writer_thread2), w3(writer_thread3), r1(reader_thread1), r2(reader_thread2);
-	w1.join(); w2.join(); w3.join(); r1.join(); r2.join();
-
-	std::cin.ignore();
-	return 0;
-}
-```
-
-possible output:
-```
-writer_thread1: jojujbm!wbmvf
-reader_thread1: thread_safe[4] == 'j'
-reader_thread2: thread_safe == 'jojujbm!wbmvf'
-writer_thread3: jojujbm!wbmvfA quick brown fox jumps over the lazy dog.
-writer_thread2: A quick brown fox jumps over the lazy dog.Franz jagt in seinem komplett verwahrlosten Taxi quer durch Bayern.
 ```
 
 ## Example #2: Multi locks.
+This example shows how to use multi locks to prevent dead locks.
 ```c++
-#include "Lock/Lock.hpp"
-
-
-#include <iostream>
-#include <string>
-#include <thread>
-
-
 lock::ThreadSafe<int> res_a(1337), res_b(42), res_c(0xdeadbeef);
 
 // writes resources a and b; reads resource c
@@ -101,7 +52,6 @@ void thread1()
 
 	(*lock_a) = (*lock_b) + (*lock_c);
 	(*lock_b) = (*lock_a) + (*lock_c);
-	std::cout << __FUNCTION__": a: " << *lock_a << ", b: " << *lock_b << ", c: " << *lock_c << "\n";
 }
 
 // writes resources b and c
@@ -113,7 +63,6 @@ void thread2()
 	int temp = (*lock_b);
 	(*lock_b) ^= (*lock_c);
 	(*lock_c) = temp;
-	std::cout << __FUNCTION__": b: " << *lock_b << ", c: " << *lock_c << "\n";
 }
 
 // reads all resources.
@@ -124,23 +73,4 @@ void thread3()
 	
 	std::cout << __FUNCTION__": a: " << *lock_a << ", b: " << *lock_b << ", c: " << *lock_c << "\n";
 }
-
-
-int main()
-{
-	while(true)
-	{
-		std::thread t1(thread1), t2(thread2), t3(thread3);
-		t1.join(); t2.join(); t3.join();
-
-		std::cin.ignore();
-	}
-	return 0;
-}
-```
-Possible output:
-```
-thread1: a: -559038695, b: -1118077432, c: -559038737
-thread3: a: -559038695, b: -1118077432, c: -559038737
-thread2: b: 1677115623, c: -1118077432
 ```
