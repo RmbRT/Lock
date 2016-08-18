@@ -94,6 +94,11 @@ namespace lock
 	/*Use this function to pass a (WriteLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_write_lock.*/
 	inline helper::write_lock_pair<T> pair(WriteLock<T> &lock, ThreadSafe<T> &thread_safe) { return { lock, thread_safe }; }
 
+	template<class T>
+	inline WriteLock<T> write_lock(ThreadSafe<T> &thread_safe) { return WriteLock<T>(thread_safe); }
+
+	template<class T>
+	inline ReadLock<T> read_lock(ThreadSafe<T> &thread_safe) { return ReadLock<T>(thread_safe); }
 
 	template<class ...T>
 	/*Locks multiple thread safe objects for reading, and sets the passed read locks to their corresponding thread safe object.
@@ -178,9 +183,6 @@ namespace lock
 		_MyT &operator=(Args... args) = delete;
 
 		ThreadSafe(const _MyT &) = delete;
-
-		inline _WriteLock writeLock() { return _WriteLock(*this); }
-		inline _ReadLock readLock() { return _ReadLock(*this); }
 
 		bool try_lock_write(_WriteLock & out)
 		{
