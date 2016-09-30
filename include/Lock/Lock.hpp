@@ -13,7 +13,7 @@ namespace lock
 	class ReadLock;
 	template<class T>
 	class ThreadSafe;
-	
+
 	/*Helper namespace with helper functions and data types that are only of internal use.*/
 	namespace helper
 	{
@@ -160,14 +160,14 @@ namespace lock
 		_WriteLock * _write_lock;
 		unsigned _read_lock;
 
-		T obj;
+		T _obj;
 
 	public:
 		template<class ...Args>
-		ThreadSafe(Args&&... args) : _mutex(), _write_lock(nullptr), _read_lock(0), obj(std::forward<Args>(args)...) { }
+		ThreadSafe(Args&&... args) : _mutex(), _write_lock(nullptr), _read_lock(0), _obj(std::forward<Args>(args)...) { }
 
 		ThreadSafe(_MyT && move) throw (helper::bad_thread_safe_move)
-			: _mutex(), _write_lock(move._write_lock), _read_lock(move._read_lock), obj(std::move(move.obj))
+			: _mutex(), _write_lock(move._write_lock), _read_lock(move._read_lock), _obj(std::move(move._obj))
 		{
 			if(_write_lock || _read_lock)
 				throw helper::bad_thread_safe_move();
@@ -187,7 +187,7 @@ namespace lock
 		bool try_lock_write(_WriteLock & out)
 		{
 			// avoid re-locking locked writelocks to the same proxy, since that must be some mistake on the user side.
-			assert(out.proxy != this);
+			assert(out._proxy != this);
 
 			std::lock_guard<std::mutex> lock(_mutex);
 			if(!_write_lock && !_read_lock)
@@ -198,7 +198,7 @@ namespace lock
 				// release old lock, if any.
 				out.~WriteLock();
 				// assign new write lock.
-				new(&out) _WriteLock(this, reinterpret_cast<T*>(&reinterpret_cast<char &>(obj)));
+				new(&out) _WriteLock(this, reinterpret_cast<T*>(&reinterpret_cast<char &>(_obj)));
 				return true;
 			}
 			else
@@ -208,7 +208,7 @@ namespace lock
 		bool try_lock_read(_ReadLock &out)
 		{
 			// avoid re-locking locked readlocks to the same proxy, since that must be some mistake on the user side.
-			assert(out.proxy != this);
+			assert(out._proxy != this);
 
 			std::lock_guard<std::mutex> lock(_mutex);
 			if(!_write_lock)
@@ -219,7 +219,7 @@ namespace lock
 				// release old read lock, if any.
 				out.~ReadLock();
 				// assign new read lock.
-				new (&out) _ReadLock(this, reinterpret_cast<const T*>(&reinterpret_cast<const char &>(obj)));
+				new (&out) _ReadLock(this, reinterpret_cast<const T*>(&reinterpret_cast<const char &>(_obj)));
 				return true;
 			}
 			else
@@ -232,7 +232,7 @@ namespace lock
 			for(;;)
 			{
 				std::lock_guard<std::mutex> lock(_mutex);
-			
+
 				if(!_write_lock && !_read_lock)
 				{
 					_write_lock = key;
@@ -279,7 +279,7 @@ namespace lock
 
 			if(!_read_lock || _write_lock)
 				throw helper::bad_read_unlock();
-			
+
 			_read_lock--;
 		}
 	};
@@ -289,48 +289,48 @@ namespace lock
 	class ReadLock
 	{
 		friend class ThreadSafe<T>;
-		ThreadSafe<T> *proxy;
-		const T* object;
+		ThreadSafe<T> *_proxy;
+		const T* _object;
 		using _MyT = ReadLock<T>;
 
-		ReadLock(ThreadSafe<T> *proxy, const T *object) : proxy(proxy), object(object) { }
+		ReadLock(ThreadSafe<T> *proxy, const T *object) : _proxy(proxy), _object(object) { }
 	public:
-		ReadLock() : proxy(nullptr), object(nullptr) { }
+		ReadLock() : _proxy(nullptr), _object(nullptr) { }
 		/*Blocks the current thread until a lock on the resource could be optained.*/
-		ReadLock(ThreadSafe<T> &proxy) : proxy(&proxy), object(nullptr) { proxy.lock_read(); object = reinterpret_cast<const T*>(&reinterpret_cast<const char &>(proxy.obj)); }
-		ReadLock(const _MyT &other) : proxy(other.proxy), object(other.object) { if(proxy) proxy->lock_read(); }
-		ReadLock(_MyT &&move) : proxy(move.proxy), object(move.object)
+		ReadLock(ThreadSafe<T> &proxy) : _proxy(&proxy), _object(nullptr) { proxy.lock_read(); _object = reinterpret_cast<const T*>(&reinterpret_cast<const char &>(proxy._obj)); }
+		ReadLock(const _MyT &other) : _proxy(other._proxy), _object(other._object) { if(_proxy) _proxy->lock_read(); }
+		ReadLock(_MyT &&move) : _proxy(move._proxy), _object(move._object)
 		{
-			move.proxy = nullptr;
-			move.object = nullptr;
+			move._proxy = nullptr;
+			move._object = nullptr;
 		}
 		~ReadLock()
 		{
-			if(proxy)
-				proxy->unlock_read();
-			proxy = nullptr;
-			object = nullptr;
+			if(_proxy)
+				_proxy->unlock_read();
+			_proxy = nullptr;
+			_object = nullptr;
 		}
 		_MyT &operator=(const _MyT &other)
 		{
-			if(&other == this || proxy == other.proxy)
+			if(&other == this || _proxy == other._proxy)
 				return *this;
 
-			if(proxy)
-				proxy->unlock_read();
+			if(_proxy)
+				_proxy->unlock_read();
 
-			proxy = other.proxy;
+			_proxy = other._proxy;
 
-			if(proxy)
-				proxy->lock_read();
+			if(_proxy)
+				_proxy->lock_read();
 
 			return *this;
 		}
 
-		inline const T* operator->() const { return object; }
-		inline const T& operator*() const { return *object; }
-		inline bool locked() const { return proxy != nullptr; }
-		
+		inline const T* operator->() const { return _object; }
+		inline const T& operator*() const { return *_object; }
+		inline bool locked() const { return _proxy != nullptr; }
+
 	};
 
 	template<class T>
@@ -338,29 +338,29 @@ namespace lock
 	class WriteLock
 	{
 		friend class ThreadSafe<T>;
-		ThreadSafe<T> *proxy;
-		T *object;
+		ThreadSafe<T> *_proxy;
+		T *_object;
 		using _MyT = WriteLock<T>;
 
-		WriteLock(ThreadSafe<T> *proxy, T * object) : proxy(proxy), object(object) { }
+		WriteLock(ThreadSafe<T> *proxy, T * object) : _proxy(proxy), _object(object) { }
 	public:
-		WriteLock() : proxy(nullptr), object(nullptr) { }
+		WriteLock() : _proxy(nullptr), _object(nullptr) { }
 		/*Blocks the current thread until a lock on the resource could be optained.*/
-		WriteLock(ThreadSafe<T> &proxy) : proxy(&proxy), object(nullptr) { proxy.lock_write(this); object = reinterpret_cast<T*>(&reinterpret_cast<T&>(proxy.obj)); }
+		WriteLock(ThreadSafe<T> &proxy) : _proxy(&proxy), _object(nullptr) { proxy.lock_write(this); _object = reinterpret_cast<T*>(&reinterpret_cast<T&>(proxy._obj)); }
 		WriteLock(const _MyT &) = delete;
-		WriteLock(_MyT && move) : proxy(move.proxy), object(move.object)
+		WriteLock(_MyT && move) : _proxy(move._proxy), _object(move._object)
 		{
-			if(proxy)
-				proxy->move_write_lock(&move, this);
-			move.proxy = nullptr;
-			move.object = nullptr;
+			if(_proxy)
+				_proxy->move_write_lock(&move, this);
+			move._proxy = nullptr;
+			move._object = nullptr;
 		}
 		~WriteLock()
 		{
-			if(proxy)
-				proxy->unlock_write(this);
-			proxy = nullptr;
-			object = nullptr;
+			if(_proxy)
+				_proxy->unlock_write(this);
+			_proxy = nullptr;
+			_object = nullptr;
 		}
 
 		_MyT &operator=(const _MyT &) = delete;
@@ -369,25 +369,25 @@ namespace lock
 			if(this == &move)
 				return *this;
 
-			if(proxy)
-				proxy->unlock_write(this);
+			if(_proxy)
+				_proxy->unlock_write(this);
 
-			proxy = move.proxy;
-			object = move.object;
+			_proxy = move._proxy;
+			_object = move._object;
 
-			if(proxy)
-				proxy->move_write_lock(&move, this);
+			if(_proxy)
+				_proxy->move_write_lock(&move, this);
 
-			move.proxy = nullptr;
-			move.object = nullptr;
+			move._proxy = nullptr;
+			move._object = nullptr;
 
 			return *this;
 		}
 
-		inline T* operator->() const { return object; }
-		inline T& operator*() const { return *object; }
+		inline T* operator->() const { return _object; }
+		inline T& operator*() const { return *_object; }
 
-		inline bool locked() const { return proxy != nullptr; }
+		inline bool locked() const { return _proxy != nullptr; }
 	};
 }
 
