@@ -4,6 +4,10 @@
 #include <mutex>
 #include <type_traits>
 #include <cassert>
+#include <thread>
+#include <memory>
+#include <atomic>
+#include <random>
 
 namespace lock
 {
@@ -14,7 +18,7 @@ namespace lock
 	template<class T>
 	class ThreadSafe;
 
-	/*Helper namespace with helper functions and data types that are only of internal use.*/
+	/** Helper namespace with functions and data types that are only of internal use. */
 	namespace helper
 	{
 		struct bad_read_unlock { };
@@ -26,311 +30,229 @@ namespace lock
 		struct bad_thread_safe_destruct { };
 
 		template<class T>
-		struct read_lock_pair
+		/** Binds a read lock handle to a resource. */
+		struct ReadLockPair
 		{
 			ReadLock<T> &lock;
 			ThreadSafe<T> &thread_safe;
 		};
 
 		template<class T>
-		struct write_lock_pair
+		/** Binds a write lock handle to a resource. */
+		struct WriteLockPair
 		{
 			WriteLock<T> &lock;
 			ThreadSafe<T> &thread_safe;
 		};
-
-		inline void destructor(void) { }
-		template<class T, class ...Targs>
-		inline void destructor(T &obj, Targs&... args) { obj.~T(); destructor(args...); }
-		inline bool try_read_lock(void) { return true; }
-		inline bool try_write_lock(void) { return true; }
-		inline bool try_any_lock(void) { return true; }
-
-		template<class T, class ...Targs>
-		bool try_any_lock(T &arg, Targs&... args);
-		template<class T, class ...Targs>
-		inline bool try_any_lock(helper::read_lock_pair<T>& arg, Targs&...args);
-		template<class T, class ...Targs>
-		inline bool try_any_lock(helper::write_lock_pair<T>& arg, Targs&...args);
-
-		template<class T, class ...Targs>
-		bool try_any_lock(T &arg, Targs&... args);
-
-		template<class T, class ...Targs>
-		inline bool try_any_lock(helper::write_lock_pair<T> &arg, Targs&... args)
-		{	using namespace helper;
-			return arg.thread_safe.try_lock_write(arg.lock) && try_any_lock(args...);
-		}
-
-		template<class T, class ...Targs>
-		inline bool try_any_lock(helper::read_lock_pair<T> &arg, Targs&... args)
-		{	using namespace helper;
-			return arg.thread_safe.try_lock_read(arg.lock) && try_any_lock(args...);
-		}
-
-		template<class T, class ...Targs>
-		/*Tries to lock all the passed ThreadSafe with their paired ReadLock. Returns true, if all locks were successful.
-		See ThreadSafe::try_lock_read.*/
-		inline bool try_read_lock(helper::read_lock_pair<T> &arg, helper::read_lock_pair<Targs>&... args)
-		{
-			using namespace helper;
-			return arg.thread_safe.try_lock_read(arg.lock) && try_read_lock(args...);
-		}
-
-		template<class T, class ...Targs>
-		/*Tries to lock all the passed ThreadSafe with their paired WriteLock. Returns true, if all locks were successful.
-		See ThreadSafe::try_lock_write.*/
-		inline bool try_write_lock(helper::write_lock_pair<T> &arg, helper::write_lock_pair<Targs>&... args)
-		{	using namespace helper;
-			return arg.thread_safe.try_lock_write(arg.lock) && try_write_lock(args...);
-		}
 	}
 
 	template<class T>
-	/*Use this function to pass a (ReadLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_read_lock.*/
-	inline helper::read_lock_pair<T> pair(ReadLock<T> &lock, ThreadSafe<T> &thread_safe) { return { lock, thread_safe }; }
+	/** Use this function to pass a (ReadLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_read_lock. */
+	inline helper::ReadLockPair<T> pair(
+		ReadLock<T> &lock,
+		ThreadSafe<T> &thread_safe);
 
 	template<class T>
-	/*Use this function to pass a (WriteLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_write_lock.*/
-	inline helper::write_lock_pair<T> pair(WriteLock<T> &lock, ThreadSafe<T> &thread_safe) { return { lock, thread_safe }; }
+	/** Use this function to pass a (WriteLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_write_lock. */
+	inline helper::WriteLockPair<T> pair(
+		WriteLock<T> &lock,
+		ThreadSafe<T> &thread_safe);
 
 	template<class T>
-	inline WriteLock<T> write_lock(ThreadSafe<T> &thread_safe) { return WriteLock<T>(thread_safe); }
+	/** Use this function to acquire a write lock object for the given thread safe resource.
+		This function will block the current thread until a lock could be acquired.
+	@param[in,out] thread_safe:
+		The thread safe resource to lock.
+	@return
+		A write lock handle to the thread safe resource. */
+	inline WriteLock<T> write_lock(
+		ThreadSafe<T> &thread_safe);
 
 	template<class T>
-	inline ReadLock<T> read_lock(ThreadSafe<T> &thread_safe) { return ReadLock<T>(thread_safe); }
+	/** Use this function to acquire a read lock object for the given thread safe resource.
+		This function will block the current thread until a lock could be acquired.
+	@param[in,out] thread_safe:
+		The thread safe resource to lock.
+	@return
+		A read lock handle to the thread safe resource. */
+	inline ReadLock<T> read_lock(
+		ThreadSafe<T> &thread_safe);
 
 	template<class ...T>
-	/*Locks multiple thread safe objects for reading, and sets the passed read locks to their corresponding thread safe object.
-	This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks.
-	Note: If you have to read lock as well as write lock objects for a function / operation, use lock::multi_lock instead.*/
-	void multi_read_lock(helper::read_lock_pair<T>&... args)
-	{	using namespace helper;
-		// try to lock all thread safe objects.
-		while(!try_read_lock(args...))
-			// not all resources could be locked. Release all locks, try again.
-			destructor(args.lock...);
-	}
+	/** Locks multiple thread safe objects for writing or reading.
+		This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks, and retries.
+	@param[in,out] pairs:
+		A mix of resource and read / write lock pairs to lock. These can be acquired using the `lock::pair()` function. */
+	inline void multi_lock(
+		T&&... pairs);
 
 	template<class ...T>
-	/*Locks multiple thread safe objects for writing, and sets the passed write locks to their corresponding thread safe object.
-	This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks.
-	Note: If you have to read lock as well as write lock objects for a function / operation, use lock::multi_lock instead.*/
-	void multi_write_lock(helper::write_lock_pair<T>&... args)
-	{	using namespace helper;
-		// try to lock all thread safe objects.
-		while(!try_write_lock(args...))
-			// not all resources could be locked. Release all locks, try again.
-			destructor(args.lock...);
-	}
+	/** Locks multiple thread safe objects for reading.
+		This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks, and retries. Note: If you have to read lock as well as write lock objects for a function / operation, use lock::multi_lock instead.
+	@param[in] pairs:
+		The resource and read lock pairs to lock. These can be acquired using the `lock::pair()` function. */
+	inline void multi_read_lock(
+		helper::ReadLockPair<T>... pairs);
 
 	template<class ...T>
-	/*Locks multiple thread safe objects for writing or reading, and sets the passed locks to their corresponding thread safe object.
-	This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks.*/
-	inline void multi_lock(T&... args)
-	{	using namespace helper;
-		// try to lock all thread safe objects.
-		while(!try_any_lock(args...))
-			// not all resources could be locked. Release all locks, try again.
-			destructor(args.lock...);
-	}
+	/** Locks multiple thread safe objects for writing.
+		This function releases all locks and tries to re-lock all locks in case one or more resources could not be locked, to prevent dead locks, and retries. Note: If you have to read lock as well as write lock objects for a function / operation, use lock::multi_lock instead.
+	@param[in] pairs:
+		The resource and write_lock pairs to lock. These can be acquired using the `lock::pair()` function. */
+	inline void multi_write_lock(
+		helper::WriteLockPair<T>... pairs);
+
+
+	typedef std::uint16_t ticket_t;
 
 
 	template<class T>
-	/*Wrapper class for shared resources.
-	Use in combination with ReadLock and WriteLock, as well as the multi_lock function to ensure thread safety and prevent dead locks.
-	To be explicit about only read locking / write locking, use multi_read_lock and multi_write_lock.
-	A function / operation should ony have one lock call to acquire its locks. This prevents dead locks / incomplete locking of needed resources.
-	Note that only one write lock may be attached to every shared resource at a time.
-	A shared resource can be read locked multiple times at once. Only when all read locks are lifted, the shared resource is unlocked.
-	While a shared resource is write locked, it can not be read locked.
-	While a shared resource is read locked, it can not be write locked.*/
+	/** Wrapper class for shared resources.
+		Use in combination with ReadLock and WriteLock, as well as the multi_lock function to ensure thread safety and prevent dead locks. To be explicit about only read locking / write locking, use multi_read_lock and multi_write_lock. A function / operation should ony have one lock call to acquire its locks. This prevents dead locks / incomplete locking of needed resources. Note that only one write lock may be attached to every shared resource at a time. A shared resource can be read locked multiple times at once. The shared resource is unlocked only after all read locks are released. While a shared resource is write locked, it can not be read locked. While a shared resource is read locked, it cannot be write locked. */
 	class ThreadSafe
 	{
 		friend class WriteLock<T>;
 		friend class ReadLock<T>;
-	public:
-		using _MyT = ThreadSafe<T>;
-		typedef WriteLock<T> _WriteLock;
-		typedef ReadLock<T> _ReadLock;
-	private:
 
-		std::mutex _mutex;
+		static struct Authorised { } const authorised;
 
-		_WriteLock * _write_lock;
-		unsigned _read_lock;
+		/** The mutex that protects the object. */
+		std::mutex m_mutex;
 
-		T _obj;
+		/** Whether the thread safe object is write locked. */
+		bool m_write_lock;
+		/** The current read lock count. */
+		std::atomic<std::size_t> m_read_locks;
+
+		/** The ticket with the highest priority. */
+		ticket_t m_priority;
+		/** Whether and, if, by whom, the thread safe object is reserved for ownership. */
+		std::thread::id m_reserved_by;
+
+		/** The thread safe object. */
+		T m_object;
 
 	public:
 		template<class ...Args>
-		ThreadSafe(Args&&... args) : _mutex(), _write_lock(nullptr), _read_lock(0), _obj(std::forward<Args>(args)...) { }
+		/** Creates a thread safe object with the given arguments.
+		@param[in] args:
+			The arguments used to construct the object. */
+		ThreadSafe(
+			Args&&... args);
 
-		ThreadSafe(_MyT && move) throw (helper::bad_thread_safe_move)
-			: _mutex(), _write_lock(move._write_lock), _read_lock(move._read_lock), _obj(std::move(move._obj))
-		{
-			if(_write_lock || _read_lock)
-				throw helper::bad_thread_safe_move();
-		}
+		/** Creates a thread safe object by moving.
+			The source object must not be locked.
+		@param[in,out] move:
+			The thread safe object to move. */
+		ThreadSafe(
+			ThreadSafe<T> && move);
 
-		~ThreadSafe() throw (helper::bad_thread_safe_destruct)
-		{
-			if(_write_lock || _read_lock)
-				throw helper::bad_thread_safe_destruct();
-		}
+		/** Destroys a thread safe object.
+			The object must not be locked. */
+		~ThreadSafe();
 
-		template<class ...Args>
-		_MyT &operator=(Args... args) = delete;
+		ThreadSafe<T> &operator=(
+			ThreadSafe<T> const&) = delete;
 
-		ThreadSafe(const _MyT &) = delete;
+		ThreadSafe(
+			ThreadSafe<T> const&) = delete;
 
-		bool try_lock_write(_WriteLock & out)
-		{
-			// avoid re-locking locked writelocks to the same proxy, since that must be some mistake on the user side.
-			assert(out._proxy != this);
+		/** Aquires a write lock.
+			This function blocks until a write lock is acquired. */
+		WriteLock<T> write();
+		/** Attempts to aquire a write lock.
+			May fail, but does not block. */
+		WriteLock<T> try_write();
 
-			std::lock_guard<std::mutex> lock(_mutex);
-			if(!_write_lock && !_read_lock)
-			{
-				_write_lock = &out;
-				// do not use assignment here, as it would try to lock our mutex again!
 
-				// release old lock, if any.
-				out.~WriteLock();
-				// assign new write lock.
-				new(&out) _WriteLock(this, reinterpret_cast<T*>(&reinterpret_cast<char &>(_obj)));
-				return true;
-			}
-			else
-				return false;
-		}
+		/** Aquires a read lock.
+			This function blocks until a read lock is acquired. */
+		ReadLock<T> read();
+		/** Attempts to acquire a read lock.
+			May fail, but does not block. */
+		ReadLock<T> try_read();
 
-		bool try_lock_read(_ReadLock &out)
-		{
-			// avoid re-locking locked readlocks to the same proxy, since that must be some mistake on the user side.
-			assert(out._proxy != this);
+		inline void reserve(
+			ticket_t priority);
 
-			std::lock_guard<std::mutex> lock(_mutex);
-			if(!_write_lock)
-			{
-				_read_lock++;
-				// do not use assignment here, as it would try to lock our mutex again!
-
-				// release old read lock, if any.
-				out.~ReadLock();
-				// assign new read lock.
-				new (&out) _ReadLock(this, reinterpret_cast<const T*>(&reinterpret_cast<const char &>(_obj)));
-				return true;
-			}
-			else
-				return false;
-		}
+		inline bool reserved() const;
 
 	private:
-		void lock_write(_WriteLock * key)
-		{
-			for(;;)
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-
-				if(!_write_lock && !_read_lock)
-				{
-					_write_lock = key;
-					return;
-				}
-			}
-		}
-
-		void move_write_lock(_WriteLock * oldKey, _WriteLock * newKey) throw (helper::bad_move_write_lock)
-		{
-			std::lock_guard<std::mutex> lock(_mutex);
-			if(!_write_lock || _write_lock != oldKey || !newKey)
-				throw helper::bad_move_write_lock();
-			else
-				_write_lock = newKey;
-		}
-
-		void unlock_write(_WriteLock * key) throw (helper::bad_write_unlock)
-		{
-			std::lock_guard<std::mutex> lock(_mutex);
-
-			if(!_write_lock || _write_lock != key)
-				throw helper::bad_write_unlock();
-
-			_write_lock = nullptr;
-		}
-
-		void lock_read()
-		{
-			for(;;)
-			{
-				std::lock_guard<std::mutex> lock(_mutex);
-				if(!_write_lock)
-				{
-					_read_lock++;
-					return;
-				}
-			}
-		}
-
-		void unlock_read() throw (helper::bad_read_unlock)
-		{
-			std::lock_guard<std::mutex> lock(_mutex);
-
-			if(!_read_lock || _write_lock)
-				throw helper::bad_read_unlock();
-
-			_read_lock--;
-		}
+		void reserve_lockfree(
+			ticket_t priority);
 	};
 
 	template<class T>
-	/*Scoped read lock class. See the descriptions for ThreadSafe.*/
+	/** Scoped read lock class
+		See the descriptions for ThreadSafe.*/
 	class ReadLock
 	{
 		friend class ThreadSafe<T>;
-		ThreadSafe<T> *_proxy;
-		const T* _object;
-		using _MyT = ReadLock<T>;
 
-		ReadLock(ThreadSafe<T> *proxy, const T *object) : _proxy(proxy), _object(object) { }
+		/** The proxy this lock is bound to. */
+		ThreadSafe<T> * m_proxy;
+
+		/** Creates a read lock bound to the given proxy.
+		@param[in] proxy:
+			The proxy that this lock is bound to. */
+		inline ReadLock(
+			ThreadSafe<T> & proxy,
+			typename ThreadSafe<T>::Authorised);
 	public:
-		ReadLock() : _proxy(nullptr), _object(nullptr) { }
-		/*Blocks the current thread until a lock on the resource could be optained.*/
-		ReadLock(ThreadSafe<T> &proxy) : _proxy(&proxy), _object(nullptr) { proxy.lock_read(); _object = reinterpret_cast<const T*>(&reinterpret_cast<const char &>(proxy._obj)); }
-		ReadLock(const _MyT &other) : _proxy(other._proxy), _object(other._object) { if(_proxy) _proxy->lock_read(); }
-		ReadLock(_MyT &&move) : _proxy(move._proxy), _object(move._object)
-		{
-			move._proxy = nullptr;
-			move._object = nullptr;
-		}
-		~ReadLock()
-		{
-			if(_proxy)
-				_proxy->unlock_read();
-			_proxy = nullptr;
-			_object = nullptr;
-		}
-		_MyT &operator=(const _MyT &other)
-		{
-			if(&other == this || _proxy == other._proxy)
-				return *this;
+		/** Creates an empty read lock. */
+		inline ReadLock();
+		/** Blocks the current thread until a lock on the resource could be optained.*/
+		ReadLock(
+			ThreadSafe<T> &proxy);
+		/** Copies the read lock. */
+		ReadLock(
+			ReadLock<T> const& other);
+		/** Moves the lock ownership from `move`.
+		@param[in,out] move:
+			The read lock to move. */
+		ReadLock(
+			ReadLock<T> &&move);
+		/** Releases the read lock. */
+		~ReadLock();
 
-			if(_proxy)
-				_proxy->unlock_read();
+		/** Copies a read lock.
+		@param[in] other:
+			The lock to copy.
+		@return
+			A reference to `this`. */
+		ReadLock<T> &operator=(
+			ReadLock<T> const& other);
+		/** Copies a read lock.
+			Unlocks `this` if it is not empty.
+		@param[in] other:
+			The lock to copy.
+		@return
+			A reference to `this`. */
+		ReadLock<T> &operator=(
+			ReadLock<T> && other);
 
-			_proxy = other._proxy;
+		/** Accesses the locked object.
+		@return
+			The locked object. */
+		inline const T* operator->() const;
+		/** Accesses the locked object.
+		@return
+			The locked object. */
+		inline const T& operator*() const;
+		/** Returns whether the read lock is bound to any proxy. */
+		inline bool locked() const;
+		/** Same as `locked()`. */
+		inline operator bool() const;
 
-			if(_proxy)
-				_proxy->lock_read();
-
-			return *this;
-		}
-
-		inline const T* operator->() const { return _object; }
-		inline const T& operator*() const { return *_object; }
-		inline bool locked() const { return _proxy != nullptr; }
-
+		/** Locks a proxy. */
+		inline void lock(
+			ThreadSafe<T> &proxy);
+		/** Tries to lock a proxy. */
+		inline bool try_lock(
+			ThreadSafe<T> &proxy);
+		/** Releases the lock.
+			The object must be locked. */
+		inline void unlock();
 	};
 
 	template<class T>
@@ -338,58 +260,51 @@ namespace lock
 	class WriteLock
 	{
 		friend class ThreadSafe<T>;
-		ThreadSafe<T> *_proxy;
-		T *_object;
-		using _MyT = WriteLock<T>;
+		ThreadSafe<T> * m_proxy;
 
-		WriteLock(ThreadSafe<T> *proxy, T * object) : _proxy(proxy), _object(object) { }
+		inline WriteLock(
+			ThreadSafe<T> &proxy,
+			typename ThreadSafe<T>::Authorised);
 	public:
-		WriteLock() : _proxy(nullptr), _object(nullptr) { }
-		/*Blocks the current thread until a lock on the resource could be optained.*/
-		WriteLock(ThreadSafe<T> &proxy) : _proxy(&proxy), _object(nullptr) { proxy.lock_write(this); _object = reinterpret_cast<T*>(&reinterpret_cast<T&>(proxy._obj)); }
-		WriteLock(const _MyT &) = delete;
-		WriteLock(_MyT && move) : _proxy(move._proxy), _object(move._object)
-		{
-			if(_proxy)
-				_proxy->move_write_lock(&move, this);
-			move._proxy = nullptr;
-			move._object = nullptr;
-		}
-		~WriteLock()
-		{
-			if(_proxy)
-				_proxy->unlock_write(this);
-			_proxy = nullptr;
-			_object = nullptr;
-		}
+		inline WriteLock();
+		/** Creates a write lock bound to the given proxy.
+			Blocks until a lock is obtained.
+		@param[in] proxy:
+			The thread safe object to lock. */
+		WriteLock(
+			ThreadSafe<T> &proxy);
+		/** Moves a write lock.
+		@param[in] move:
+			The write lock to move. */
+		WriteLock(
+			WriteLock<T> && move);
+		/** Releases the write lock. */
+		~WriteLock();
+		/** Moves a write lock.
+			Unlocks `this` if it is not empty.
+		@param[in] move:
+			The write lock to move.
+		@return
+			A reference to `this`. */
+		WriteLock<T> &operator=(
+			WriteLock<T> && move);
 
-		_MyT &operator=(const _MyT &) = delete;
-		_MyT &operator=(_MyT && move)
-		{
-			if(this == &move)
-				return *this;
+		inline T* operator->() const;
+		inline T& operator*() const;
+		inline bool locked() const;
+		inline operator bool() const;
 
-			if(_proxy)
-				_proxy->unlock_write(this);
-
-			_proxy = move._proxy;
-			_object = move._object;
-
-			if(_proxy)
-				_proxy->move_write_lock(&move, this);
-
-			move._proxy = nullptr;
-			move._object = nullptr;
-
-			return *this;
-		}
-
-		inline T* operator->() const { return _object; }
-		inline T& operator*() const { return *_object; }
-
-		inline bool locked() const { return _proxy != nullptr; }
+		inline void lock(
+			ThreadSafe<T> &proxy);
+		inline bool try_lock(
+			ThreadSafe<T> &proxy);
+		inline void unlock();
 	};
 }
+
+#include "ThreadSafe.inl"
+#include "ReadLock.inl"
+#include "WriteLock.inl"
 
 
 #endif
