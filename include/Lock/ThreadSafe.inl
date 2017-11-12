@@ -154,7 +154,7 @@ namespace lock
 		m_read_locks(0),
 		m_object(std::move(move.m_object))
 	{
-		if(move.m_write_lock || move.m_read_locks)
+		if(move.m_write_lock || move.m_read_locks.load(std::memory_order_relaxed))
 			throw helper::bad_thread_safe_move();
 	}
 
@@ -176,15 +176,15 @@ namespace lock
 			std::lock_guard<std::mutex> lock(m_mutex);
 
 			if(!m_write_lock
-			&& !m_read_locks
-			&& (!reserved() || m_reserved_by == std::this_thread::get_id()))
+			&& !m_read_locks.load(std::memory_order_relaxed)
+			&& thread_can_claim())
 			{
 				m_write_lock = true;
-				m_reserved_by = std::thread::id();
+				unreserve();
 				return WriteLock<T>(*this, authorised);
 			}
 			// only reserve after initial try failed.
-			reserve_lockfree(ticket);
+			reserve_locked(ticket);
 		}
 	}
 
@@ -192,12 +192,12 @@ namespace lock
 	WriteLock<T> ThreadSafe<T>::try_write()
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
-		if(m_write_lock || m_read_locks)
-			return WriteLock<T>();
-		else if(!reserved() || m_reserved_by == std::this_thread::get_id())
+		if(!m_write_lock
+		&& !m_read_locks.load(std::memory_order_relaxed)
+		&& thread_can_claim())
 		{
-			m_reserved_by = std::thread::id();
-
+			m_write_lock = true;
+			unreserve();
 			return WriteLock<T>(*this, authorised);
 		}
 		else
@@ -215,20 +215,16 @@ namespace lock
 		{
 			std::lock_guard<std::mutex> lock(m_mutex);
 
-			if(m_read_locks)
-			{
-				++m_read_locks;
-				return WriteLock<T>(*this, authorised);
-			}
 			if(!m_write_lock
-			&& (!reserved() || m_reserved_by == std::this_thread::get_id()))
+			&& thread_can_claim())
 			{
-				++m_read_locks;
-				m_reserved_by = std::thread::id();
-				return WriteLock<T>(*this, authorised);
+				m_read_locks.fetch_add(1, std::memory_order_relaxed);
+				unreserve();
+				return ReadLock<T>(*this, authorised);
 			}
+
 			// only reserve after initial try failed.
-			reserve_lockfree(ticket);
+			reserve_locked(ticket);
 		}
 	}
 
@@ -236,17 +232,11 @@ namespace lock
 	ReadLock<T> ThreadSafe<T>::try_read()
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
-		if(m_read_locks)
+		if(!m_write_lock
+		&& thread_can_claim())
 		{
-			m_read_locks++;
-
-			return ReadLock<T>(*this, authorised);
-		} else if(!m_write_lock
-			&& (!reserved() || m_reserved_by == std::this_thread::get_id()))
-		{
-			m_read_locks++;
-			m_reserved_by = std::thread::id();
-
+			m_read_locks.fetch_add(1, std::memory_order_relaxed);
+			unreserve();
 			return ReadLock<T>(*this, authorised);
 		}
 		else
@@ -258,7 +248,7 @@ namespace lock
 		ticket_t priority)
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
-		return reserve_lockfree(priority);
+		reserve_locked(priority);
 	}
 
 	template<class T>
@@ -268,7 +258,19 @@ namespace lock
 	}
 
 	template<class T>
-	void ThreadSafe<T>::reserve_lockfree(
+	void ThreadSafe<T>::unreserve()
+	{
+		return m_reserved_by = std::thread::id();
+	}
+
+	template<class T>
+	bool ThreadSafe<T>::thread_can_claim()
+	{
+		return !reserved() || m_reserved_by == std::this_thread::get_id();
+	}
+
+	template<class T>
+	void ThreadSafe<T>::reserve_locked(
 		ticket_t priority)
 	{
 		if(!reserved() || priority > m_priority)

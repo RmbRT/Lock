@@ -27,7 +27,7 @@ namespace lock
 		m_proxy(other.m_proxy)
 	{
 		if(m_proxy)
-			++m_proxy->m_read_locks;
+			m_proxy->m_read_locks.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	template<class T>
@@ -42,7 +42,7 @@ namespace lock
 	ReadLock<T>::~ReadLock()
 	{
 		if(locked())
-			--m_proxy->m_read_locks;
+			m_proxy->m_read_locks.fetch_sub(1, std::memory_order_relaxed);
 	}
 
 	template<class T>
@@ -51,13 +51,13 @@ namespace lock
 	{
 		// unlock old proxy.
 		if(m_proxy && m_proxy != other.m_proxy)
-			--m_proxy->m_read_locks;
+			m_proxy->m_read_locks.fetch_sub(1, std::memory_order_relaxed);
 
 		m_proxy = other.m_proxy;
 
 		// lock new proxy.
 		if(other.m_proxy)
-			++other.m_proxy->m_read_locks;
+			other.m_proxy->m_read_locks.fetch_add(1, std::memory_order_relaxed);
 
 		return *this;
 	}
@@ -71,7 +71,7 @@ namespace lock
 
 		// unlock old proxy.
 		if(m_proxy)
-			--m_proxy->m_read_locks;
+			m_proxy->m_read_locks.fetch_sub(1, std::memory_order_relaxed);
 
 		m_proxy = other.m_proxy;
 		other.m_proxy = nullptr;
@@ -129,7 +129,7 @@ namespace lock
 		assert(locked()
 			&& "Tried to unlock empty lock.");
 
-		--m_proxy->m_read_locks;
+		m_proxy->m_read_locks.fetch_sub(1, std::memory_order_relaxed);
 		m_proxy = nullptr;
 	}
 }

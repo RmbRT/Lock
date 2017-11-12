@@ -44,6 +44,24 @@ namespace lock
 			WriteLock<T> &lock;
 			ThreadSafe<T> &thread_safe;
 		};
+
+		template<class T, class = void>
+		struct is_iterator
+		{
+			enum { value = false };
+		};
+		template<class T>
+		struct is_iterator<T, std::iterator_traits<T>>
+		{
+			enum { value = true };
+		};
+
+		template<class T, class ...Ts>
+		struct are_iterators
+		{
+			enum { value = is_iterator<T>::value && are_iterators<Ts...>::value };
+		};
+
 	}
 
 	template<class T>
@@ -77,6 +95,11 @@ namespace lock
 		A read lock handle to the thread safe resource. */
 	inline ReadLock<T> read_lock(
 		ThreadSafe<T> &thread_safe);
+
+	template<class ...InputIterator, class = typename std::enable_if<helper::are_iterators<InputIterator...>::value>::type>
+	inline void multi_lock(
+		InputIterator... begin,
+		InputIterator... end);
 
 	template<class ...T>
 	/** Locks multiple thread safe objects for writing or reading.
@@ -116,6 +139,9 @@ namespace lock
 
 		static struct Authorised { } const authorised;
 
+		/** The thread safe object. */
+		T m_object;
+
 		/** The mutex that protects the object. */
 		std::mutex m_mutex;
 
@@ -128,9 +154,6 @@ namespace lock
 		ticket_t m_priority;
 		/** Whether and, if, by whom, the thread safe object is reserved for ownership. */
 		std::thread::id m_reserved_by;
-
-		/** The thread safe object. */
-		T m_object;
 
 	public:
 		template<class ...Args>
@@ -172,13 +195,19 @@ namespace lock
 			May fail, but does not block. */
 		ReadLock<T> try_read();
 
+		/** Tries to reserve the thread safe object. */
 		inline void reserve(
 			ticket_t priority);
-
+		/** Returns whether the thread safe object is reserved by any thread. */
 		inline bool reserved() const;
 
 	private:
-		void reserve_lockfree(
+		/** Removes the current reservation, if exists. */
+		inline void unreserve();
+		/** Determines whether the current executing thread can claim the thread safe object. */
+		bool thread_can_claim();
+		/** Can be called within a context where the mutex is already locked. */
+		void reserve_locked(
 			ticket_t priority);
 	};
 
@@ -269,12 +298,12 @@ namespace lock
 		inline WriteLock();
 		/** Creates a write lock bound to the given proxy.
 			Blocks until a lock is obtained.
-		@param[in] proxy:
+		@param[in,out] proxy:
 			The thread safe object to lock. */
 		WriteLock(
 			ThreadSafe<T> &proxy);
 		/** Moves a write lock.
-		@param[in] move:
+		@param[in,out] move:
 			The write lock to move. */
 		WriteLock(
 			WriteLock<T> && move);
@@ -282,7 +311,7 @@ namespace lock
 		~WriteLock();
 		/** Moves a write lock.
 			Unlocks `this` if it is not empty.
-		@param[in] move:
+		@param[in,out] move:
 			The write lock to move.
 		@return
 			A reference to `this`. */
