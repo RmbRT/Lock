@@ -65,11 +65,103 @@ namespace lock
 		{
 			reserve(ticket, rest...);
 		}
+
+
+		template<class T>
+		void reserve_ranges(
+			ticket_t ticket,
+			Range<T> range)
+		{
+			for(auto it : range)
+				reserve(ticket, it.thread_safe);
+		}
+
+		template<class T, class U, class ... Trest>
+		void reserve_ranges(
+			ticket_t ticket,
+			Range<T> range,
+			Range<U> rest0,
+			Range<Trest> ...restN)
+		{
+			reserve_ranges(ticket, range);
+			reserve_ranges(ticket, rest0, restN...);
+		}
+
+		template<class T>
+		bool try_lock_ranges(
+			Range<T> range)
+		{
+			for(auto it = range.begin(); it != range.end(); it++)
+				if(!try_lock(*it))
+				{
+					for(auto &j : Range<T>(range.begin(), it))
+						j.lock.unlock();
+					return false;
+				}
+			return true;
+		}
+
+		template<class T, class U, class ...Trest>
+		bool try_lock_ranges(
+			Range<T> range,
+			Range<U> rest0,
+			Range<Trest> ... restN)
+		{
+			if(try_lock_ranges(range))
+			{
+				if(!try_lock_ranges(rest0, restN...))
+				{
+					for(auto &i : range)
+						i.lock.unlock();
+					return false;
+				}
+				return true;
+			} else
+				return false;
+		}
+
+		template<class T>
+		Range<T>::Range(
+			T begin,
+			T end):
+			m_begin(begin),
+			m_end(end)
+		{
+		}
+
+		template<class T>
+		T const& Range<T>::begin() const
+		{
+			return m_begin;
+		}
+
+		template<class T>
+		T const& Range<T>::end() const
+		{
+			return m_end;
+		}
 	}
 
+	template<class T>
+	ReadLockPair<T>::ReadLockPair(
+		ReadLock<T> &lock,
+		ThreadSafe<T> &thread_safe):
+		lock(lock),
+		thread_safe(thread_safe)
+	{
+	}
 
 	template<class T>
-	helper::ReadLockPair<T> pair(
+	WriteLockPair<T>::WriteLockPair(
+		WriteLock<T> &lock,
+		ThreadSafe<T> &thread_safe):
+		lock(lock),
+		thread_safe(thread_safe)
+	{
+	}
+
+	template<class T>
+	ReadLockPair<T> pair(
 		ReadLock<T> &lock,
 		ThreadSafe<T> &thread_safe)
 	{
@@ -77,12 +169,23 @@ namespace lock
 	}
 
 	template<class T>
-	helper::WriteLockPair<T> pair(
+	WriteLockPair<T> pair(
 		WriteLock<T> &lock,
 		ThreadSafe<T> &thread_safe)
 	{
 		return { lock, thread_safe };
 	}
+
+
+	template<class T>
+	helper::Range<T> range(
+		T begin,
+		T end)
+	{
+		return helper::Range<T>(begin, end);
+	}
+
+
 
 	template<class T>
 	WriteLock<T> write_lock(
@@ -96,6 +199,30 @@ namespace lock
 		ThreadSafe<T> &thread_safe)
 	{
 		return ReadLock<T>(thread_safe);
+	}
+
+	template<class ...InputIterator, class>
+	void range_lock(
+		helper::Range<InputIterator>... ranges)
+	{
+		// first, try trivial locking (without reservations).
+		if(helper::try_lock_ranges(ranges...))
+			return;
+
+		// create a ticket.
+		std::random_device rd;
+		std::uniform_int_distribution<ticket_t> dist(0, ~ticket_t(0));
+		ticket_t const ticket = dist(rd);
+
+		// now try locking via reservations.
+		for(;; std::this_thread::yield())
+		{
+			// try reserving all resources.
+			helper::reserve_ranges(ticket, ranges...);
+			// try again to lock everything.
+			if(helper::try_lock_ranges(ranges...))
+				return;
+		}
 	}
 
 	template<class ...T>
@@ -123,14 +250,14 @@ namespace lock
 
 	template<class ...T>
 	void multi_read_lock(
-		helper::ReadLockPair<T> ... pairs)
+		ReadLockPair<T> ... pairs)
 	{
 		multi_lock(pairs...);
 	}
 
 	template<class ...T>
 	void multi_write_lock(
-		helper::WriteLockPair<T> ... pairs)
+		WriteLockPair<T> ... pairs)
 	{
 		multi_lock(pairs...);
 	}
@@ -260,7 +387,7 @@ namespace lock
 	template<class T>
 	void ThreadSafe<T>::unreserve()
 	{
-		return m_reserved_by = std::thread::id();
+		m_reserved_by = std::thread::id();
 	}
 
 	template<class T>

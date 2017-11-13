@@ -29,52 +29,71 @@ namespace lock
 		struct bad_thread_safe_move { };
 		struct bad_thread_safe_destruct { };
 
-		template<class T>
-		/** Binds a read lock handle to a resource. */
-		struct ReadLockPair
+		template<class ... Types>
+		struct each_exists {};
+
+		template<class ...T>
+		struct each_iterator
 		{
-			ReadLock<T> &lock;
-			ThreadSafe<T> &thread_safe;
+			typedef each_exists<typename T::iterator_category...> type;
 		};
 
 		template<class T>
-		/** Binds a write lock handle to a resource. */
-		struct WriteLockPair
+		class Range
 		{
-			WriteLock<T> &lock;
-			ThreadSafe<T> &thread_safe;
-		};
+			T m_begin, m_end;
+		public:
+			Range() = default;
+			Range(
+				T begin,
+				T end);
 
-		template<class T, class = void>
-		struct is_iterator
-		{
-			enum { value = false };
+			inline T const& begin() const;
+			inline T const& end() const;
 		};
-		template<class T>
-		struct is_iterator<T, std::iterator_traits<T>>
-		{
-			enum { value = true };
-		};
-
-		template<class T, class ...Ts>
-		struct are_iterators
-		{
-			enum { value = is_iterator<T>::value && are_iterators<Ts...>::value };
-		};
-
 	}
+
+
+	template<class T>
+	/** Binds a read lock handle to a resource. */
+	struct ReadLockPair
+	{
+		ReadLock<T> &lock;
+		ThreadSafe<T> &thread_safe;
+
+		ReadLockPair(
+			ReadLock<T> &lock,
+			ThreadSafe<T> &thread_safe);
+	};
+
+	template<class T>
+	/** Binds a write lock handle to a resource. */
+	struct WriteLockPair
+	{
+		WriteLock<T> &lock;
+		ThreadSafe<T> &thread_safe;
+
+		WriteLockPair(
+			WriteLock<T> &lock,
+			ThreadSafe<T> &thread_safe);
+	};
 
 	template<class T>
 	/** Use this function to pass a (ReadLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_read_lock. */
-	inline helper::ReadLockPair<T> pair(
+	inline ReadLockPair<T> pair(
 		ReadLock<T> &lock,
 		ThreadSafe<T> &thread_safe);
 
 	template<class T>
 	/** Use this function to pass a (WriteLock, ThreadSafe) pair to the locking functions lock::multi_lock and lock::multi_write_lock. */
-	inline helper::WriteLockPair<T> pair(
+	inline WriteLockPair<T> pair(
 		WriteLock<T> &lock,
 		ThreadSafe<T> &thread_safe);
+
+	template<class T>
+	inline helper::Range<T> range(
+		T begin,
+		T end);
 
 	template<class T>
 	/** Use this function to acquire a write lock object for the given thread safe resource.
@@ -96,10 +115,11 @@ namespace lock
 	inline ReadLock<T> read_lock(
 		ThreadSafe<T> &thread_safe);
 
-	template<class ...InputIterator, class = typename std::enable_if<helper::are_iterators<InputIterator...>::value>::type>
-	inline void multi_lock(
-		InputIterator... begin,
-		InputIterator... end);
+
+	template<class ...InputIterator,
+		class = typename helper::each_iterator<InputIterator...>::type>
+	inline void range_lock(
+		helper::Range<InputIterator>... ranges);
 
 	template<class ...T>
 	/** Locks multiple thread safe objects for writing or reading.
@@ -115,7 +135,7 @@ namespace lock
 	@param[in] pairs:
 		The resource and read lock pairs to lock. These can be acquired using the `lock::pair()` function. */
 	inline void multi_read_lock(
-		helper::ReadLockPair<T>... pairs);
+		ReadLockPair<T>... pairs);
 
 	template<class ...T>
 	/** Locks multiple thread safe objects for writing.
@@ -123,7 +143,7 @@ namespace lock
 	@param[in] pairs:
 		The resource and write_lock pairs to lock. These can be acquired using the `lock::pair()` function. */
 	inline void multi_write_lock(
-		helper::WriteLockPair<T>... pairs);
+		WriteLockPair<T>... pairs);
 
 
 	typedef std::uint16_t ticket_t;
