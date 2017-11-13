@@ -119,27 +119,27 @@ namespace lock
 			} else
 				return false;
 		}
+	}
 
-		template<class T>
-		Range<T>::Range(
-			T begin,
-			T end):
-			m_begin(begin),
-			m_end(end)
-		{
-		}
+	template<class T>
+	Range<T>::Range(
+		T begin,
+		T end):
+		m_begin(begin),
+		m_end(end)
+	{
+	}
 
-		template<class T>
-		T const& Range<T>::begin() const
-		{
-			return m_begin;
-		}
+	template<class T>
+	T const& Range<T>::begin() const
+	{
+		return m_begin;
+	}
 
-		template<class T>
-		T const& Range<T>::end() const
-		{
-			return m_end;
-		}
+	template<class T>
+	T const& Range<T>::end() const
+	{
+		return m_end;
 	}
 
 	template<class T>
@@ -177,12 +177,12 @@ namespace lock
 	}
 
 
-	template<class T>
-	helper::Range<T> range(
+	template<class T, class>
+	Range<T> range(
 		T begin,
 		T end)
 	{
-		return helper::Range<T>(begin, end);
+		return Range<T>(begin, end);
 	}
 
 
@@ -203,7 +203,7 @@ namespace lock
 
 	template<class ...InputIterator, class>
 	void range_lock(
-		helper::Range<InputIterator>... ranges)
+		Range<InputIterator>... ranges)
 	{
 		// first, try trivial locking (without reservations).
 		if(helper::try_lock_ranges(ranges...))
